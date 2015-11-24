@@ -19,6 +19,9 @@ from plone.memoize.instance import memoize, clearafter
 from plone.app.workflow import PloneMessageFactory as _
 from plone.app.workflow.interfaces import ISharingPageRole
 
+from zope.event import notify
+from plone.app.workflow.events import LocalrolesModifiedEvent
+
 AUTH_GROUP = 'AuthenticatedUsers'
 STICKY = (AUTH_GROUP,)
 
@@ -64,6 +67,7 @@ class SharingView(BrowserView):
             if not self.request.get('REQUEST_METHOD','GET') == 'POST':
                 raise Forbidden
 
+            existing = self.context.users_with_local_role('Editor')
             authenticator = self.context.restrictedTraverse('@@authenticator', None) 
             if not authenticator.verify(): 
                 raise Forbidden
@@ -71,6 +75,7 @@ class SharingView(BrowserView):
             # Update the acquire-roles setting
             inherit = bool(form.get('inherit', False))
             reindex = self.update_inherit(inherit, reindex=False)
+
 
             # Update settings for users and groups
             entries = form.get('entries', [])
@@ -86,7 +91,25 @@ class SharingView(BrowserView):
                 
             if reindex:
                 aq_inner(self.context).reindexObjectSecurity()
-            IStatusMessage(self.request).addStatusMessage(_(u"Changes saved."), type='info')
+                new_roles = self.context.users_with_local_role('Editor')
+                changes = {'action': 'nochange'}
+                added = []
+                for user in new_roles:
+                    if user not in existing:
+                        added.append(user)
+                changes['added'] = added
+                removed = []
+                for user in existing:
+                    if user not in new_roles:
+                        removed.append(user)
+                changes['removed'] = removed
+                if len(added) or len(removed):
+                    changes['action'] = 'changed'
+                #print changes
+                notify(LocalrolesModifiedEvent(self.context, changes))
+
+            IStatusMessage(self.request).addStatusMessage(
+                                            _(u"Changes saved."), type='info')
             
         # Other buttons return to the sharing page
         if cancel_button:
